@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="mBgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181b"/>
+      <stop offset="50%" stop-color="#09090b"/>
+      <stop offset="100%" stop-color="#050506"/>
+    </linearGradient>
+    <linearGradient id="mLimeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#bef264"/>
+      <stop offset="50%" stop-color="#a3e635"/>
+      <stop offset="100%" stop-color="#65a30d"/>
+    </linearGradient>
+    <radialGradient id="mGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a3e635" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#a3e635" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Full Bleed Square Background (no rounded corners for maskable safe-zone) -->
+  <rect width="512" height="512" fill="url(#mBgGrad)"/>
+
+  <!-- Soft Glow inside Safe Zone -->
+  <circle cx="256" cy="256" r="180" fill="url(#mGlow)"/>
+
+  <!-- Inner Brand Badge (Safely within central 80% circle / 410px) -->
+  <rect x="120" y="120" width="272" height="272" rx="60" fill="url(#mLimeGrad)"/>
+
+  <!-- Central Sparkle Core -->
+  <path d="M256 160 C256 215, 215 256, 160 256 C215 256, 256 297, 256 352 C256 297, 297 256, 352 256 C297 256, 256 215, 256 160 Z" fill="#09090b"/>
+
+  <!-- Accent Sparkle Top-Right -->
+  <path d="M324 180 C324 198, 310 212, 292 212 C310 212, 324 226, 324 244 C324 226, 338 212, 356 212 C338 212, 324 198, 324 180 Z" fill="#09090b"/>
+
+  <!-- Tiny Accent Dot Bottom-Left -->
+  <circle cx="196" cy="316" r="12" fill="#09090b"/>
+</svg>

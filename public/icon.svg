@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181b"/>
+      <stop offset="50%" stop-color="#09090b"/>
+      <stop offset="100%" stop-color="#050506"/>
+    </linearGradient>
+    <linearGradient id="limeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#bef264"/>
+      <stop offset="50%" stop-color="#a3e635"/>
+      <stop offset="100%" stop-color="#65a30d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a3e635" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#a3e635" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#a3e635" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Full Bleed Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+
+  <!-- Soft Ambient Lime Glow -->
+  <circle cx="256" cy="256" r="220" fill="url(#glow)"/>
+
+  <!-- Inner Brand Badge -->
+  <rect x="96" y="96" width="320" height="320" rx="72" fill="url(#limeGrad)" filter="url(#shadow)"/>
+
+  <!-- Inner Dark Sparkle Core -->
+  <!-- Large Central Sparkle / 4-point star -->
+  <path d="M256 148 C256 210, 210 256, 148 256 C210 256, 256 302, 256 364 C256 302, 302 256, 364 256 C302 256, 256 210, 256 148 Z" fill="#09090b"/>
+
+  <!-- Small Accent Sparkle Top-Right -->
+  <path d="M336 172 C336 194, 320 210, 298 210 C320 210, 336 226, 336 248 C336 226, 352 210, 374 210 C352 210, 336 194, 336 172 Z" fill="#09090b"/>
+
+  <!-- Tiny Diamond Bottom-Left -->
+  <circle cx="186" cy="326" r="14" fill="#09090b"/>
+</svg>
