@@ -3,9 +3,28 @@ import { APP_CONFIG } from '../config';
 import { PhotoItem, VideoItem, Order } from '../types';
 import { compressImageTo1MB, compressImageTo500KB } from './compression';
 
-// Environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Production Supabase project credentials for PromptBazaar
+export const DEFAULT_SUPABASE_URL = 'https://ugrtslgrwbocwzwxtlxx.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_ZXGRag1pF3vzxICmnk8GDA_zSMoptE-';
+
+const rawUrl = (
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
+  (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) ||
+  ''
+).trim();
+
+const rawKey = (
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
+  (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) ||
+  ''
+).trim();
+
+// If env var is missing or remains the placeholder from template, use production credentials
+const isPlaceholderUrl = !rawUrl || rawUrl.includes('your-project-id');
+const isPlaceholderKey = !rawKey || rawKey.includes('...');
+
+export const supabaseUrl = !isPlaceholderUrl ? rawUrl : DEFAULT_SUPABASE_URL;
+export const supabaseAnonKey = !isPlaceholderKey ? rawKey : DEFAULT_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && 
@@ -14,7 +33,7 @@ export const isSupabaseConfigured = Boolean(
   !supabaseUrl.includes('your-project-id')
 );
 
-// Real Supabase client instance (if configured)
+// Real Supabase client instance
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
@@ -211,6 +230,7 @@ export const dataApi = {
           .order('created_at', { ascending: false });
 
         if (error) {
+          console.warn('[Supabase Notice] Retrying photo_items with core columns:', error.message);
           const fallback = await supabase
             .from('photo_items')
             .select('id, title, description, category, is_paid, price, image_url, free_prompt_text, is_published, created_at')
@@ -220,15 +240,19 @@ export const dataApi = {
           error = fallback.error;
         }
 
-        if (!error && data && data.length > 0) {
-          return data;
+        if (error) {
+          console.error('[Supabase Error] dataApi.getPhotoItems failed:', error);
+          throw error;
         }
+
+        return data || [];
       } catch (err) {
-        console.warn('Supabase query failed, using local store:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getPhotoItems:', err);
+        throw err;
       }
     }
 
-    // Fallback to local storage or initial seeds
+    // Fallback to local storage or initial seeds ONLY when Supabase is not configured
     const saved = localStorage.getItem(LS_PHOTOS_KEY);
     if (saved) {
       try {
@@ -280,6 +304,7 @@ export const dataApi = {
         let { data, error, count } = await query;
 
         if (error) {
+          console.warn('[Supabase Notice] Retrying paginated photo_items query with core columns:', error.message);
           let fallbackQuery = supabase
             .from('photo_items')
             .select('id, title, description, category, is_paid, price, image_url, free_prompt_text, is_published, created_at', { count: 'exact' })
@@ -298,16 +323,21 @@ export const dataApi = {
           count = fbRes.count;
         }
 
-        if (!error && data) {
-          const hasMore = count !== null ? to + 1 < count : data.length === pageSize;
-          return { items: data, hasMore };
+        if (error) {
+          console.error('[Supabase Error] dataApi.getPhotoItemsPaginated failed:', error);
+          throw error;
         }
+
+        const items = data || [];
+        const hasMore = count !== null ? to + 1 < count : items.length === pageSize;
+        return { items, hasMore };
       } catch (err) {
-        console.warn('Supabase range query failed, using local store:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getPhotoItemsPaginated:', err);
+        throw err;
       }
     }
 
-    // Fallback to local store or initial seeds
+    // Fallback ONLY when Supabase is not configured
     const all = await this.getPhotoItems();
     const filtered = all
       .filter((p) => p.is_published !== false)
@@ -332,9 +362,15 @@ export const dataApi = {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && data) return data;
+        if (error) {
+          console.error('[Supabase Error] dataApi.getAllPhotoItemsAdmin failed:', error);
+          throw error;
+        }
+
+        return data || [];
       } catch (err) {
-        console.warn('Admin fetch failed from Supabase, using local:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getAllPhotoItemsAdmin:', err);
+        throw err;
       }
     }
 
@@ -532,11 +568,15 @@ export const dataApi = {
           .eq('is_published', true)
           .order('created_at', { ascending: false });
 
-        if (!error && data && data.length > 0) {
-          return data;
+        if (error) {
+          console.error('[Supabase Error] dataApi.getVideoItems failed:', error);
+          throw error;
         }
+
+        return data || [];
       } catch (err) {
-        console.warn('Supabase video query failed, using local store:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getVideoItems:', err);
+        throw err;
       }
     }
 
@@ -562,9 +602,15 @@ export const dataApi = {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && data) return data;
+        if (error) {
+          console.error('[Supabase Error] dataApi.getAllVideoItemsAdmin failed:', error);
+          throw error;
+        }
+
+        return data || [];
       } catch (err) {
-        console.warn('Admin video fetch failed from Supabase, using local:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getAllVideoItemsAdmin:', err);
+        throw err;
       }
     }
 
@@ -822,9 +868,15 @@ export const dataApi = {
           .eq('user_id', userId)
           .order('created_at', { ascending: false });
 
-        if (!error && data) return data;
+        if (error) {
+          console.error('[Supabase Error] dataApi.getUserOrders failed:', error);
+          throw error;
+        }
+
+        return data || [];
       } catch (err) {
-        console.warn('Failed to fetch user orders from Supabase:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getUserOrders:', err);
+        throw err;
       }
     }
 
@@ -842,9 +894,15 @@ export const dataApi = {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && data) return data;
+        if (error) {
+          console.error('[Supabase Error] dataApi.getAllOrdersAdmin failed:', error);
+          throw error;
+        }
+
+        return data || [];
       } catch (err) {
-        console.warn('Failed to fetch all orders from Supabase:', err);
+        console.error('[Supabase Network/Query Error] dataApi.getAllOrdersAdmin:', err);
+        throw err;
       }
     }
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { APP_CONFIG } from './config';
@@ -110,6 +110,20 @@ function MainContent() {
   const [homeLoadingMore, setHomeLoadingMore] = useState(false);
   const [homeCategory, setHomeCategory] = useState<string>('All');
   const observerTargetRef = useRef<HTMLDivElement | null>(null);
+
+  // Compute all available photo categories (config categories + categories from database items)
+  const homeCategories = useMemo(() => {
+    const list: string[] = ['All'];
+    APP_CONFIG.photoCategories.forEach((cat) => {
+      if (cat !== 'All' && !list.includes(cat)) list.push(cat);
+    });
+    photoItems.forEach((item) => {
+      if (item.category && !list.includes(item.category)) {
+        list.push(item.category);
+      }
+    });
+    return list;
+  }, [photoItems]);
 
   // Load / Refresh Home Photos (Page 0, 12 items)
   const loadHomePhotos = useCallback(async (cat: string = 'All') => {
@@ -370,7 +384,7 @@ function MainContent() {
 
             {/* Sticky Category Chip Row Above Home Grid */}
             <div className="sticky top-[52px] sm:top-14 z-30 bg-zinc-950/95 backdrop-blur-md py-2.5 px-4 border-y border-zinc-800/80 -mx-4 flex items-center gap-2 overflow-x-auto no-scrollbar shadow-lg">
-              {APP_CONFIG.photoCategories.map((category) => {
+              {homeCategories.map((category) => {
                 const isSelected = homeCategory === category;
                 return (
                   <button

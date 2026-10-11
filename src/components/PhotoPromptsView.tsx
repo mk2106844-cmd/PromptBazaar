@@ -42,9 +42,22 @@ export const PhotoPromptsView: React.FC<PhotoPromptsViewProps> = ({
   initialSearchQuery = '',
 }) => {
   const { t } = useLanguage();
-  const [selectedCategory, setSelectedCategory] = useState<PhotoCategory>('All');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [typeFilter, setTypeFilter] = useState<'all' | 'free' | 'paid'>('all');
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
+
+  const allCategories = useMemo(() => {
+    const list: string[] = ['All'];
+    APP_CONFIG.photoCategories.forEach((cat) => {
+      if (cat !== 'All' && !list.includes(cat)) list.push(cat);
+    });
+    items.forEach((item) => {
+      if (item.category && !list.includes(item.category)) {
+        list.push(item.category);
+      }
+    });
+    return list;
+  }, [items]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -151,7 +164,7 @@ export const PhotoPromptsView: React.FC<PhotoPromptsViewProps> = ({
 
       {/* Category Pills (horizontal scrollable with icons) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar text-xs font-semibold">
-        {APP_CONFIG.photoCategories.map((category) => {
+        {allCategories.map((category) => {
           const isSelected = selectedCategory === category;
           return (
             <button
