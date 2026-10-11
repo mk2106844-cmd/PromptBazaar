@@ -1,0 +1,6 @@
+{
+  "name": "PromptBazaar",
+  "description": "Mobile-first AI Prompt marketplace for Indian creators with UPI checkout and verified prompts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
