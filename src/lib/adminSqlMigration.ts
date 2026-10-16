@@ -201,12 +201,16 @@ CREATE POLICY "Admins delete media" ON storage.objects
     FOR DELETE USING (bucket_id = 'media' AND public.is_admin());
 
 -- Private Bucket 'payment-screenshots': Authenticated users upload to "<user_id>/<timestamp>.jpg"
+-- Private Bucket 'payment-screenshots': Authenticated users upload to "<user_id>/<timestamp>.jpg", anon users upload to "anon-.../<timestamp>.jpg"
 DROP POLICY IF EXISTS "Users upload own payment screenshots" ON storage.objects;
 CREATE POLICY "Users upload own payment screenshots" ON storage.objects
     FOR INSERT WITH CHECK (
         bucket_id = 'payment-screenshots'
-        AND auth.role() = 'authenticated'
-        AND (storage.foldername(name))[1] = auth.uid()::text
+        AND (
+            (auth.role() = 'authenticated' AND (storage.foldername(name))[1] = auth.uid()::text)
+            OR
+            (auth.role() = 'anon' AND (storage.foldername(name))[1] LIKE 'anon-%')
+        )
     );
 
 DROP POLICY IF EXISTS "Admins and owners view payment screenshots" ON storage.objects;
