@@ -835,11 +835,17 @@ export const dataApi = {
           .select()
           .single();
 
-        if (!error && data) {
+        if (error) {
+          console.error('Supabase create order failed (RLS?):', error.message);
+          throw new Error(error.message || 'Payment submission failed.');
+        }
+
+        if (data) {
           createdOrder = data;
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Supabase create order failed:', err);
+        throw err; // Propagate error so frontend knows submission failed
       }
     }
 
@@ -870,33 +876,38 @@ export const dataApi = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
+        let data: Order[] | null = null;
 
         if (userId) {
-          query = query.eq('user_id', userId);
+          const res = await supabase.from('orders').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+          if (res.error) throw res.error;
+          data = res.data;
         } else if (localOrders.length > 0) {
-          // Anonymous user: fetch orders by the IDs they have in local storage
+          // Anonymous user: fetch orders by the IDs they have in local storage via secure RPC
           const localOrderIds = localOrders.map(o => o.id);
-          query = query.in('id', localOrderIds);
+          const res = await supabase.rpc('get_anon_orders', { order_ids: localOrderIds });
+          if (res.error) {
+            console.warn('[Supabase Warning] get_anon_orders RPC failed (possibly not deployed yet), falling back to local data:', res.error);
+            return localOrders;
+          }
+          data = res.data;
         } else {
           return [];
-        }
-
-        const { data, error } = await query;
-
-        if (error) {
-          console.error('[Supabase Error] dataApi.getUserOrders failed:', error);
-          throw error;
         }
 
         if (data && data.length > 0 && !userId) {
           // Sync database status back to local storage for anonymous users
           const updatedLocalOrders = localOrders.map(localOrder => {
-            const remoteOrder = data.find(r => r.id === localOrder.id);
+            const remoteOrder = data!.find(r => r.id === localOrder.id);
             return remoteOrder ? { ...localOrder, status: remoteOrder.status } : localOrder;
           });
           localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(updatedLocalOrders));
+
+          // Return the latest synced localOrders so that un-fetched pending orders are not lost
+          return updatedLocalOrders;
         }
+
+        if (!userId) return localOrders;
 
         return data || [];
       } catch (err) {
