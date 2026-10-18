@@ -106,7 +106,7 @@ CREATE POLICY "Approved purchasers and admins can view photo secrets" ON public.
         OR EXISTS (
             SELECT 1 FROM public.orders
             WHERE orders.item_id = photo_secrets.photo_id
-              AND orders.user_id = auth.uid()
+              AND orders.user_id = auth.uid()::text
               AND orders.status = 'approved'
         )
     );
@@ -130,7 +130,7 @@ CREATE POLICY "Approved purchasers and admins can view video secrets" ON public.
         OR EXISTS (
             SELECT 1 FROM public.orders
             WHERE orders.item_id = video_secrets.video_id
-              AND orders.user_id = auth.uid()
+              AND orders.user_id = auth.uid()::text
               AND orders.status = 'approved'
         )
     );
@@ -141,11 +141,22 @@ CREATE POLICY "Admins can manage video secrets" ON public.video_secrets
     WITH CHECK (public.is_admin());
 
 -- Orders: Normal users can only insert 'pending' orders; only admins can approve/reject
+-- Also allow anonymous users to insert orders if user_id starts with 'anon-'
 DROP POLICY IF EXISTS "Users can insert own order" ON public.orders;
 CREATE POLICY "Users can insert own order" ON public.orders
     FOR INSERT WITH CHECK (
-        auth.uid() = user_id 
-        AND (status = 'pending' OR status IS NULL)
+        (status = 'pending' OR status IS NULL)
+        AND (
+            auth.uid()::text = user_id
+            OR user_id LIKE 'anon-%'
+        )
+    );
+
+DROP POLICY IF EXISTS "Users can view own orders and admins can view all" ON public.orders;
+CREATE POLICY "Users can view own orders and admins can view all" ON public.orders
+    FOR SELECT USING (
+        public.is_admin()
+        OR auth.uid()::text = user_id
     );
 
 DROP POLICY IF EXISTS "Admins can update orders" ON public.orders;
@@ -201,12 +212,20 @@ CREATE POLICY "Admins delete media" ON storage.objects
     FOR DELETE USING (bucket_id = 'media' AND public.is_admin());
 
 -- Private Bucket 'payment-screenshots': Authenticated users upload to "<user_id>/<timestamp>.jpg"
+-- ALTER TABLE for existing deployments to ensure user_id is TEXT (to support anon users)
+ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS orders_user_id_fkey;
+ALTER TABLE public.orders ALTER COLUMN user_id TYPE TEXT;
+
+-- Private Bucket 'payment-screenshots': Authenticated users upload to "<user_id>/<timestamp>.jpg", anon users upload to "anon-.../<timestamp>.jpg"
 DROP POLICY IF EXISTS "Users upload own payment screenshots" ON storage.objects;
 CREATE POLICY "Users upload own payment screenshots" ON storage.objects
     FOR INSERT WITH CHECK (
         bucket_id = 'payment-screenshots'
-        AND auth.role() = 'authenticated'
-        AND (storage.foldername(name))[1] = auth.uid()::text
+        AND (
+            (auth.role() = 'authenticated' AND (storage.foldername(name))[1] = auth.uid()::text)
+            OR
+            (name LIKE 'anon-%')
+        )
     );
 
 DROP POLICY IF EXISTS "Admins and owners view payment screenshots" ON storage.objects;

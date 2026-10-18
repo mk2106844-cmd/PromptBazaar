@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS public.video_secrets (
 -- 8. ORDERS TABLE (Manual UPI Purchase Flow)
 CREATE TABLE IF NOT EXISTS public.orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
     user_email TEXT NOT NULL,
     item_type TEXT NOT NULL CHECK (item_type IN ('photo', 'video')),
     item_id UUID NOT NULL,
@@ -152,6 +152,16 @@ BEGIN
     SELECT 1 FROM public.admins 
     WHERE LOWER(email) = LOWER(auth.jwt() ->> 'email')
   ) OR LOWER(COALESCE(auth.jwt() ->> 'email', '')) IN ('mk2106844@gmail.com', 'admin@promptbazaar.com');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Securely fetch anonymous user orders without exposing table globally
+CREATE OR REPLACE FUNCTION public.get_anon_orders(order_ids UUID[])
+RETURNS SETOF public.orders AS $$
+BEGIN
+  RETURN QUERY
+  SELECT * FROM public.orders
+  WHERE id = ANY(order_ids) AND user_id LIKE 'anon-%';
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -236,7 +246,7 @@ CREATE POLICY "Approved purchasers and admins can view photo secrets" ON public.
         OR EXISTS (
             SELECT 1 FROM public.orders
             WHERE orders.item_id = photo_secrets.photo_id
-              AND orders.user_id = auth.uid()
+              AND orders.user_id = auth.uid()::text
               AND orders.status = 'approved'
         )
     );
@@ -268,7 +278,7 @@ CREATE POLICY "Approved purchasers and admins can view video secrets" ON public.
         OR EXISTS (
             SELECT 1 FROM public.orders
             WHERE orders.item_id = video_secrets.video_id
-              AND orders.user_id = auth.uid()
+              AND orders.user_id = auth.uid()::text
               AND orders.status = 'approved'
         )
     );
@@ -284,7 +294,8 @@ CREATE POLICY "Admins can manage video secrets" ON public.video_secrets
 DROP POLICY IF EXISTS "Users can view own orders and admins can view all" ON public.orders;
 CREATE POLICY "Users can view own orders and admins can view all" ON public.orders
     FOR SELECT USING (
-        auth.uid() = user_id OR public.is_admin()
+        public.is_admin()
+        OR auth.uid()::text = user_id
     );
 
 -- Normal users can create their own order, but ONLY in 'pending' status!
@@ -292,8 +303,11 @@ CREATE POLICY "Users can view own orders and admins can view all" ON public.orde
 DROP POLICY IF EXISTS "Users can insert own order" ON public.orders;
 CREATE POLICY "Users can insert own order" ON public.orders
     FOR INSERT WITH CHECK (
-        auth.uid() = user_id 
-        AND (status = 'pending' OR status IS NULL)
+        (status = 'pending' OR status IS NULL)
+        AND (
+            auth.uid()::text = user_id
+            OR user_id LIKE 'anon-%'
+        )
     );
 
 -- ONLY admins can update orders (approve or reject)
@@ -357,13 +371,16 @@ CREATE POLICY "Admins delete media" ON storage.objects
     FOR DELETE USING (bucket_id = 'media' AND public.is_admin());
 
 -- --- (B) POLICIES FOR PRIVATE 'payment-screenshots' BUCKET ---
--- Authenticated users upload to path "<user_id>/<timestamp>.jpg"
+-- Authenticated users upload to path "<user_id>/<timestamp>.jpg", anon users upload to "anon-.../<timestamp>.jpg"
 DROP POLICY IF EXISTS "Users upload own payment screenshots" ON storage.objects;
 CREATE POLICY "Users upload own payment screenshots" ON storage.objects
     FOR INSERT WITH CHECK (
         bucket_id = 'payment-screenshots'
-        AND auth.role() = 'authenticated'
-        AND (storage.foldername(name))[1] = auth.uid()::text
+        AND (
+            (auth.role() = 'authenticated' AND (storage.foldername(name))[1] = auth.uid()::text)
+            OR
+            (name LIKE 'anon-%')
+        )
     );
 
 -- Admins and owner users can read/generate signed URLs

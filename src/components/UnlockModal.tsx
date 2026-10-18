@@ -131,18 +131,18 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
     setIsSubmitting(true);
     try {
       let storedScreenshotPath: string | undefined = undefined;
+      const effectiveUserId = user?.id || `anon-${Date.now()}`;
 
       // Upload screenshot to private bucket "payment-screenshots"
       // Path format: "<user_id>/<timestamp>.jpg"
       // Compresses to under 1 MB first, images only
       // Stores ONLY the file path in the orders table, NOT a public URL!
       if (screenshotFile) {
-        const effectiveUserId = user?.id || `anon-${Date.now()}`;
         storedScreenshotPath = await dataApi.uploadPaymentScreenshot(screenshotFile, effectiveUserId);
       }
 
       const order = await dataApi.createOrder({
-        userId: user?.id || `anon-${Date.now()}`,
+        userId: effectiveUserId,
         userEmail: emailToUse,
         itemType: itemType,
         itemId: item.id,

@@ -816,6 +816,8 @@ export const dataApi = {
     upiRef: string;
     screenshotUrl?: string;
   }): Promise<Order> {
+    let createdOrder: Order | null = null;
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
@@ -833,15 +835,23 @@ export const dataApi = {
           .select()
           .single();
 
-        if (!error && data) return data;
-      } catch (err) {
+        if (error) {
+          console.error('Supabase create order failed (RLS?):', error.message);
+          throw new Error(error.message || 'Payment submission failed.');
+        }
+
+        if (data) {
+          createdOrder = data;
+        }
+      } catch (err: any) {
         console.error('Supabase create order failed:', err);
+        throw err; // Propagate error so frontend knows submission failed
       }
     }
 
-    // Local storage fallback
+    // Always keep local storage in sync (especially critical for anonymous users)
     const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
-    const newOrder: Order = {
+    const newOrder: Order = createdOrder || {
       id: `ord-${Date.now()}`,
       user_id: orderData.userId,
       user_email: orderData.userEmail,
@@ -853,25 +863,51 @@ export const dataApi = {
       status: 'pending',
       created_at: new Date().toISOString(),
     };
+
     orders.unshift(newOrder);
     localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(orders));
+
     return newOrder;
   },
 
   // Fetch orders for current user
   async getUserOrders(userId?: string, userEmail?: string): Promise<Order[]> {
-    if (isSupabaseConfigured && supabase && userId) {
-      try {
-        const { data, error } = await supabase
-          .from('orders')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
+    const localOrders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
 
-        if (error) {
-          console.error('[Supabase Error] dataApi.getUserOrders failed:', error);
-          throw error;
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let data: Order[] | null = null;
+
+        if (userId) {
+          const res = await supabase.from('orders').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+          if (res.error) throw res.error;
+          data = res.data;
+        } else if (localOrders.length > 0) {
+          // Anonymous user: fetch orders by the IDs they have in local storage via secure RPC
+          const localOrderIds = localOrders.map(o => o.id);
+          const res = await supabase.rpc('get_anon_orders', { order_ids: localOrderIds });
+          if (res.error) {
+            console.warn('[Supabase Warning] get_anon_orders RPC failed (possibly not deployed yet), falling back to local data:', res.error);
+            return localOrders;
+          }
+          data = res.data;
+        } else {
+          return [];
         }
+
+        if (data && data.length > 0 && !userId) {
+          // Sync database status back to local storage for anonymous users
+          const updatedLocalOrders = localOrders.map(localOrder => {
+            const remoteOrder = data!.find(r => r.id === localOrder.id);
+            return remoteOrder ? { ...localOrder, status: remoteOrder.status } : localOrder;
+          });
+          localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(updatedLocalOrders));
+
+          // Return the latest synced localOrders so that un-fetched pending orders are not lost
+          return updatedLocalOrders;
+        }
+
+        if (!userId) return localOrders;
 
         return data || [];
       } catch (err) {
@@ -880,9 +916,8 @@ export const dataApi = {
       }
     }
 
-    const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
-    if (!userEmail && !userId) return orders;
-    return orders.filter((o) => o.user_id === userId || (userEmail && o.user_email === userEmail));
+    if (!userEmail && !userId) return localOrders;
+    return localOrders.filter((o) => o.user_id === userId || (userEmail && o.user_email === userEmail));
   },
 
   // Admin fetch all orders
@@ -919,9 +954,14 @@ export const dataApi = {
           .update({ status, updated_at: new Date().toISOString() })
           .eq('id', orderId);
 
-        if (!error) return true;
+        if (error) {
+          console.error('Supabase update error:', error);
+          return false;
+        }
+        return true;
       } catch (err) {
         console.error('Failed to update order status in Supabase:', err);
+        return false;
       }
     }
 
