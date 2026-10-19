@@ -970,7 +970,7 @@ export const dataApi = {
       const targetVideo = videos.find((v) => v.id === videoId);
       if (targetVideo?.free_content) return targetVideo.free_content;
 
-      return 'Full HD Masterpiece Video prompt & assets unlocked.';
+      return null;
     }
 
     return null;
@@ -1258,6 +1258,38 @@ export const dataApi = {
 
     const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
     return orders;
+  },
+
+  // Admin Delete Order
+  async deleteOrder(orderId: string): Promise<boolean> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { error } = await supabase
+          .from('orders')
+          .delete()
+          .eq('id', orderId);
+
+        if (error) {
+          console.error('[Supabase Error] deleteOrder failed:', error);
+          throw new Error(`Order delete nahi ho saka: ${error.message}`);
+        }
+
+        // Sync with local cache
+        const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+        const filtered = orders.filter((o) => o.id !== orderId);
+        localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(filtered));
+
+        return true;
+      } catch (err: any) {
+        console.error('Failed to delete order in Supabase:', err);
+        throw err;
+      }
+    }
+
+    const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+    const filtered = orders.filter((o) => o.id !== orderId);
+    localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(filtered));
+    return true;
   },
 
   // Admin Update Order Status (Approve / Reject)
