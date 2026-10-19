@@ -173,7 +173,7 @@ export const PromptDetailModal: React.FC<PromptDetailModalProps> = ({
 
               {/* Prompt Box */}
               <div className="p-3.5 rounded-2xl bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-200 leading-relaxed select-all whitespace-pre-wrap max-h-56 overflow-y-auto">
-                {displayablePrompt || item.free_prompt_text || 'Prompt text ready.'}
+                {displayablePrompt || item.free_prompt_text || 'Please contact support if your prompt is empty.'}
               </div>
 
               {/* Copy Prompt CTA Button */}
