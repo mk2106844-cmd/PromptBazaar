@@ -312,7 +312,7 @@ export const MyUnlocksView: React.FC<MyUnlocksViewProps> = ({
                     </div>
 
                     <div className="p-3 bg-zinc-950 rounded-xl border border-emerald-950/60 font-mono text-xs text-emerald-200 select-all leading-relaxed max-h-40 overflow-y-auto">
-                      {secretContent || 'Masterpiece content loaded successfully.'}
+                      {secretContent || 'Please contact support if your prompt is empty.'}
                     </div>
 
                     <button

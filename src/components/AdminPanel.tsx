@@ -775,6 +775,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // --- ORDER APPROVALS ---
+  const handleDeleteOrder = async (orderId: string) => {
+    if (!window.confirm('Kya aap sach mein is order ko permanently delete karna chahte hain?')) return;
+
+    try {
+      const success = await dataApi.deleteOrder(orderId);
+      if (success) {
+        setOrders((prev) => prev.filter((o) => o.id !== orderId));
+        showFeedback('Order permanently delete ho gaya! 🗑️', 'success');
+      }
+    } catch (err: any) {
+      showFeedback(`Delete failed: ${err.message}`, 'error');
+    }
+  };
+
   const handleOrderStatusChange = async (orderId: string, status: 'approved' | 'rejected') => {
     const success = await dataApi.updateOrderStatus(orderId, status);
     if (success) {
@@ -1545,6 +1559,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             <span>Reject</span>
                           </button>
                         )}
+                        <button
+                          onClick={() => handleDeleteOrder(order.id)}
+                          className="px-2 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors ml-1"
+                          title="Delete Order"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   </div>
