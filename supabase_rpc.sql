@@ -61,7 +61,7 @@ BEGIN
     IF public.is_admin() THEN
         SELECT secret_prompt INTO v_secret
         FROM public.photo_secrets
-        WHERE photo_id = p_photo_id;
+        WHERE photo_id = (p_photo_id::uuid);
         RETURN v_secret;
     END IF;
 
@@ -69,7 +69,7 @@ BEGIN
     IF auth.uid() IS NOT NULL OR auth.jwt() ->> 'email' IS NOT NULL THEN
         IF EXISTS (
             SELECT 1 FROM public.orders
-            WHERE orders.item_id = p_photo_id
+            WHERE orders.item_id = (p_photo_id::uuid)
               AND (
                   (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
                   OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
@@ -78,7 +78,7 @@ BEGIN
         ) THEN
             SELECT secret_prompt INTO v_secret
             FROM public.photo_secrets
-            WHERE photo_id = p_photo_id;
+            WHERE photo_id = (p_photo_id::uuid);
             RETURN v_secret;
         END IF;
     END IF;
@@ -87,13 +87,13 @@ BEGIN
     IF p_anon_user_id IS NOT NULL AND TRIM(p_anon_user_id) <> '' THEN
         IF EXISTS (
             SELECT 1 FROM public.orders
-            WHERE orders.item_id = p_photo_id
+            WHERE orders.item_id = (p_photo_id::uuid)
               AND orders.user_id = TRIM(p_anon_user_id)
               AND orders.status = 'approved'
         ) THEN
             SELECT secret_prompt INTO v_secret
             FROM public.photo_secrets
-            WHERE photo_id = p_photo_id;
+            WHERE photo_id = (p_photo_id::uuid);
             RETURN v_secret;
         END IF;
     END IF;
@@ -121,7 +121,7 @@ BEGIN
     IF public.is_admin() THEN
         SELECT secret_content INTO v_secret
         FROM public.video_secrets
-        WHERE video_id = p_video_id;
+        WHERE video_id = (p_video_id::uuid);
         RETURN v_secret;
     END IF;
 
@@ -129,7 +129,7 @@ BEGIN
     IF auth.uid() IS NOT NULL OR auth.jwt() ->> 'email' IS NOT NULL THEN
         IF EXISTS (
             SELECT 1 FROM public.orders
-            WHERE orders.item_id = p_video_id
+            WHERE orders.item_id = (p_video_id::uuid)
               AND (
                   (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
                   OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
@@ -138,7 +138,7 @@ BEGIN
         ) THEN
             SELECT secret_content INTO v_secret
             FROM public.video_secrets
-            WHERE video_id = p_video_id;
+            WHERE video_id = (p_video_id::uuid);
             RETURN v_secret;
         END IF;
     END IF;
@@ -147,13 +147,13 @@ BEGIN
     IF p_anon_user_id IS NOT NULL AND TRIM(p_anon_user_id) <> '' THEN
         IF EXISTS (
             SELECT 1 FROM public.orders
-            WHERE orders.item_id = p_video_id
+            WHERE orders.item_id = (p_video_id::uuid)
               AND orders.user_id = TRIM(p_anon_user_id)
               AND orders.status = 'approved'
         ) THEN
             SELECT secret_content INTO v_secret
             FROM public.video_secrets
-            WHERE video_id = p_video_id;
+            WHERE video_id = (p_video_id::uuid);
             RETURN v_secret;
         END IF;
     END IF;
