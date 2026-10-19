@@ -52,12 +52,14 @@ interface AdminPanelProps {
   onPhotosUpdated: () => void;
   onVideosUpdated?: () => void;
   onOpenSqlModal: () => void;
+  onOpenAuth?: () => void;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   onPhotosUpdated,
   onVideosUpdated,
   onOpenSqlModal,
+  onOpenAuth,
 }) => {
   const { user, isAdmin, setDemoUser } = useAuth();
   const [activeAdminTab, setActiveAdminTab] = useState<'photos' | 'videos' | 'orders' | 'settings' | 'supabase'>('photos');
@@ -938,6 +940,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           )}
         </div>
       </div>
+
+      {/* Session Verification Notice for Supabase Writes */}
+      {isSupabaseConfigured && user && (user.id.startsWith('creator-') || user.id.startsWith('user-')) && (
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+            <span>
+              <strong>Supabase Sync Notice:</strong> Supabase cloud database me live photo prompts aur changes save karne ke liye verified admin email (<code className="text-lime-300 font-bold">mk2106844@gmail.com</code>) se login hona zaroori hai.
+            </span>
+          </div>
+          {onOpenAuth && (
+            <button
+              onClick={onOpenAuth}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs shrink-0 transition-colors shadow-sm"
+            >
+              Admin Sign In
+            </button>
+          )}
+        </div>
+      )}
 
       {/* STORAGE USAGE BAR (Used vs 1 GB) */}
       <StorageUsageBar

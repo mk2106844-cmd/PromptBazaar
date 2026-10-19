@@ -43,10 +43,10 @@ export const MyUnlocksView: React.FC<MyUnlocksViewProps> = ({
       for (const order of userOrders) {
         if (order.status === 'approved') {
           if (order.item_type === 'video') {
-            const secret = await dataApi.getVideoSecret(order.item_id, user?.email, false);
+            const secret = await dataApi.getVideoSecret(order.item_id, user?.email, false, order.user_id);
             if (secret) secretsMap[order.item_id] = secret;
           } else {
-            const secret = await dataApi.getSecretPrompt(order.item_id, user?.email, false);
+            const secret = await dataApi.getSecretPrompt(order.item_id, user?.email, false, order.user_id);
             if (secret) secretsMap[order.item_id] = secret;
           }
         }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, Database, Key, Terminal, Sparkles, Layers } from 'lucide-react';
+import { X, Copy, Check, Database, Key, Terminal, Sparkles, Layers, ShieldAlert, Wrench } from 'lucide-react';
 import { SUPABASE_SETUP_SQL } from '../lib/sql';
-import { ADMIN_UPGRADE_SQL } from '../lib/adminSqlMigration';
+import { ADMIN_UPGRADE_SQL, ORDERS_RLS_FIX_SQL } from '../lib/adminSqlMigration';
 import { isSupabaseConfigured } from '../lib/supabase';
 
 interface SqlSetupModalProps {
@@ -10,12 +10,17 @@ interface SqlSetupModalProps {
 }
 
 export const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'initial' | 'upgrade'>('upgrade');
+  const [activeTab, setActiveTab] = useState<'fix' | 'upgrade' | 'initial'>('fix');
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
 
-  const currentSql = activeTab === 'upgrade' ? ADMIN_UPGRADE_SQL : SUPABASE_SETUP_SQL;
+  const currentSql =
+    activeTab === 'fix'
+      ? ORDERS_RLS_FIX_SQL
+      : activeTab === 'upgrade'
+      ? ADMIN_UPGRADE_SQL
+      : SUPABASE_SETUP_SQL;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(currentSql);
@@ -50,29 +55,40 @@ export const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ isOpen, onClose })
           </button>
         </div>
 
-        {/* Tab switch: Admin Upgrade SQL vs Full Initial SQL */}
-        <div className="flex items-center gap-2 bg-zinc-950 p-1 rounded-xl border border-zinc-800 mt-3 text-xs font-bold">
+        {/* Tab switch: Orders Fix SQL vs Admin Upgrade vs Full Initial */}
+        <div className="flex items-center gap-1.5 bg-zinc-950 p-1 rounded-xl border border-zinc-800 mt-3 text-xs font-bold overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('fix')}
+            className={`flex-1 py-2 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'fix'
+                ? 'bg-lime-400 text-zinc-950 shadow font-black'
+                : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Orders & RLS Fix (0A000 Fix)</span>
+          </button>
           <button
             onClick={() => setActiveTab('upgrade')}
-            className={`flex-1 py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
               activeTab === 'upgrade'
-                ? 'bg-lime-400 text-zinc-950 shadow'
+                ? 'bg-lime-400 text-zinc-950 shadow font-black'
                 : 'text-zinc-400 hover:text-white'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Admin Upgrade SQL (Featured, Order & RLS)</span>
+            <span>Admin Upgrade SQL</span>
           </button>
           <button
             onClick={() => setActiveTab('initial')}
-            className={`flex-1 py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 whitespace-nowrap ${
               activeTab === 'initial'
-                ? 'bg-lime-400 text-zinc-950 shadow'
+                ? 'bg-lime-400 text-zinc-950 shadow font-black'
                 : 'text-zinc-400 hover:text-white'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Full Initial Setup SQL</span>
+            <span>Full Initial SQL</span>
           </button>
         </div>
 

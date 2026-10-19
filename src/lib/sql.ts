@@ -103,9 +103,10 @@ CREATE TABLE IF NOT EXISTS public.video_secrets (
 );
 
 -- 8. ORDERS TABLE (Manual UPI Purchase Flow)
+-- Supports both authenticated users and guest checkout (user_id TEXT)
 CREATE TABLE IF NOT EXISTS public.orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id TEXT NOT NULL,
+    user_id TEXT,
     user_email TEXT NOT NULL,
     item_type TEXT NOT NULL CHECK (item_type IN ('photo', 'video')),
     item_id UUID NOT NULL,
@@ -152,16 +153,6 @@ BEGIN
     SELECT 1 FROM public.admins 
     WHERE LOWER(email) = LOWER(auth.jwt() ->> 'email')
   ) OR LOWER(COALESCE(auth.jwt() ->> 'email', '')) IN ('mk2106844@gmail.com', 'admin@promptbazaar.com');
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Securely fetch anonymous user orders without exposing table globally
-CREATE OR REPLACE FUNCTION public.get_anon_orders(order_ids UUID[])
-RETURNS SETOF public.orders AS $$
-BEGIN
-  RETURN QUERY
-  SELECT * FROM public.orders
-  WHERE id = ANY(order_ids) AND user_id LIKE 'anon-%';
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -246,7 +237,10 @@ CREATE POLICY "Approved purchasers and admins can view photo secrets" ON public.
         OR EXISTS (
             SELECT 1 FROM public.orders
             WHERE orders.item_id = photo_secrets.photo_id
-              AND orders.user_id = auth.uid()::text
+              AND (
+                  (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
+                  OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
+              )
               AND orders.status = 'approved'
         )
     );
@@ -278,7 +272,10 @@ CREATE POLICY "Approved purchasers and admins can view video secrets" ON public.
         OR EXISTS (
             SELECT 1 FROM public.orders
             WHERE orders.item_id = video_secrets.video_id
-              AND orders.user_id = auth.uid()::text
+              AND (
+                  (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
+                  OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
+              )
               AND orders.status = 'approved'
         )
     );
@@ -290,24 +287,22 @@ CREATE POLICY "Admins can manage video secrets" ON public.video_secrets
     WITH CHECK (public.is_admin());
 
 -- --- (8) ORDERS POLICIES (PURCHASE SECURITY) ---
--- Users can view ONLY their own orders; admins can view all orders
+-- Users can view ONLY their own orders (by auth.uid or email); admins can view all orders
 DROP POLICY IF EXISTS "Users can view own orders and admins can view all" ON public.orders;
 CREATE POLICY "Users can view own orders and admins can view all" ON public.orders
     FOR SELECT USING (
         public.is_admin()
-        OR auth.uid()::text = user_id
+        OR (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
+        OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
     );
 
--- Normal users can create their own order, but ONLY in 'pending' status!
+-- Any user (anonymous or authenticated) can create an order in 'pending' status
 -- Prevents malicious buyers from setting status = 'approved' during insert!
 DROP POLICY IF EXISTS "Users can insert own order" ON public.orders;
+DROP POLICY IF EXISTS "Allow users to create pending order" ON public.orders;
 CREATE POLICY "Users can insert own order" ON public.orders
     FOR INSERT WITH CHECK (
         (status = 'pending' OR status IS NULL)
-        AND (
-            auth.uid()::text = user_id
-            OR user_id LIKE 'anon-%'
-        )
     );
 
 -- ONLY admins can update orders (approve or reject)
@@ -320,6 +315,140 @@ CREATE POLICY "Admins can update orders" ON public.orders
 DROP POLICY IF EXISTS "Admins can delete orders" ON public.orders;
 CREATE POLICY "Admins can delete orders" ON public.orders
     FOR DELETE USING (public.is_admin());
+
+-- --- (8B) RPC FUNCTIONS FOR GUEST ORDERS & UNLOCKING ---
+CREATE OR REPLACE FUNCTION public.get_anon_orders(anon_user_id text)
+RETURNS SETOF public.orders
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF anon_user_id IS NULL OR TRIM(anon_user_id) = '' OR LENGTH(TRIM(anon_user_id)) < 8 THEN
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT *
+    FROM public.orders
+    WHERE orders.user_id = TRIM(anon_user_id)
+    ORDER BY created_at DESC;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_anon_orders(text) TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_unlocked_photo_secret(
+    p_photo_id text,
+    p_anon_user_id text DEFAULT NULL
+)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_secret text;
+BEGIN
+    IF public.is_admin() THEN
+        SELECT secret_prompt INTO v_secret
+        FROM public.photo_secrets
+        WHERE photo_id = p_photo_id;
+        RETURN v_secret;
+    END IF;
+
+    IF auth.uid() IS NOT NULL OR auth.jwt() ->> 'email' IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM public.orders
+            WHERE orders.item_id = p_photo_id
+              AND (
+                  (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
+                  OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
+              )
+              AND orders.status = 'approved'
+        ) THEN
+            SELECT secret_prompt INTO v_secret
+            FROM public.photo_secrets
+            WHERE photo_id = p_photo_id;
+            RETURN v_secret;
+        END IF;
+    END IF;
+
+    IF p_anon_user_id IS NOT NULL AND TRIM(p_anon_user_id) <> '' THEN
+        IF EXISTS (
+            SELECT 1 FROM public.orders
+            WHERE orders.item_id = p_photo_id
+              AND orders.user_id = TRIM(p_anon_user_id)
+              AND orders.status = 'approved'
+        ) THEN
+            SELECT secret_prompt INTO v_secret
+            FROM public.photo_secrets
+            WHERE photo_id = p_photo_id;
+            RETURN v_secret;
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_unlocked_photo_secret(text, text) TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_unlocked_video_secret(
+    p_video_id text,
+    p_anon_user_id text DEFAULT NULL
+)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_secret text;
+BEGIN
+    IF public.is_admin() THEN
+        SELECT secret_content INTO v_secret
+        FROM public.video_secrets
+        WHERE video_id = p_video_id;
+        RETURN v_secret;
+    END IF;
+
+    IF auth.uid() IS NOT NULL OR auth.jwt() ->> 'email' IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM public.orders
+            WHERE orders.item_id = p_video_id
+              AND (
+                  (auth.uid() IS NOT NULL AND orders.user_id = auth.uid()::text)
+                  OR (auth.jwt() ->> 'email' IS NOT NULL AND LOWER(orders.user_email) = LOWER(auth.jwt() ->> 'email'))
+              )
+              AND orders.status = 'approved'
+        ) THEN
+            SELECT secret_content INTO v_secret
+            FROM public.video_secrets
+            WHERE video_id = p_video_id;
+            RETURN v_secret;
+        END IF;
+    END IF;
+
+    IF p_anon_user_id IS NOT NULL AND TRIM(p_anon_user_id) <> '' THEN
+        IF EXISTS (
+            SELECT 1 FROM public.orders
+            WHERE orders.item_id = p_video_id
+              AND orders.user_id = TRIM(p_anon_user_id)
+              AND orders.status = 'approved'
+        ) THEN
+            SELECT secret_content INTO v_secret
+            FROM public.video_secrets
+            WHERE video_id = p_video_id;
+            RETURN v_secret;
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_unlocked_video_secret(text, text) TO anon, authenticated, service_role;
 
 -- =================================================================
 -- 12. STORAGE BUCKET SETUP ('media' & private 'payment-screenshots')
@@ -370,17 +499,12 @@ DROP POLICY IF EXISTS "Admins delete media" ON storage.objects;
 CREATE POLICY "Admins delete media" ON storage.objects
     FOR DELETE USING (bucket_id = 'media' AND public.is_admin());
 
--- --- (B) POLICIES FOR PRIVATE 'payment-screenshots' BUCKET ---
--- Authenticated users upload to path "<user_id>/<timestamp>.jpg", anon users upload to "anon-.../<timestamp>.jpg"
+-- Allow upload of payment screenshots for all buyers (including guests before login)
 DROP POLICY IF EXISTS "Users upload own payment screenshots" ON storage.objects;
-CREATE POLICY "Users upload own payment screenshots" ON storage.objects
+DROP POLICY IF EXISTS "Allow upload payment screenshots" ON storage.objects;
+CREATE POLICY "Allow upload payment screenshots" ON storage.objects
     FOR INSERT WITH CHECK (
         bucket_id = 'payment-screenshots'
-        AND (
-            (auth.role() = 'authenticated' AND (storage.foldername(name))[1] = auth.uid()::text)
-            OR
-            (name LIKE 'anon-%')
-        )
     );
 
 -- Admins and owner users can read/generate signed URLs

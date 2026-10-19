@@ -5,7 +5,7 @@ import { APP_CONFIG } from '../config';
 import { getUpiPaymentUrl, getUpiQrImageUrl } from '../lib/qr';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
-import { dataApi } from '../lib/supabase';
+import { dataApi, getPersistedGuestId } from '../lib/supabase';
 import { useAppSettings } from '../lib/settings';
 
 export interface UnlockTarget {
@@ -131,7 +131,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
     setIsSubmitting(true);
     try {
       let storedScreenshotPath: string | undefined = undefined;
-      const effectiveUserId = user?.id || `anon-${Date.now()}`;
+      const effectiveUserId = user?.id || getPersistedGuestId();
 
       // Upload screenshot to private bucket "payment-screenshots"
       // Path format: "<user_id>/<timestamp>.jpg"

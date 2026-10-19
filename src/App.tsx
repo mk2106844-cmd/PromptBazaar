@@ -238,13 +238,13 @@ function MainContent() {
         if (order.status === 'approved') {
           if (order.item_type === 'video') {
             approvedVideoIds.add(order.item_id);
-            const secret = await dataApi.getVideoSecret(order.item_id, user?.email, isAdmin);
+            const secret = await dataApi.getVideoSecret(order.item_id, user?.email, isAdmin, order.user_id);
             if (secret) {
               videoSecretsMap[order.item_id] = secret;
             }
           } else {
             approvedPhotoIds.add(order.item_id);
-            const secret = await dataApi.getSecretPrompt(order.item_id, user?.email, isAdmin);
+            const secret = await dataApi.getSecretPrompt(order.item_id, user?.email, isAdmin, order.user_id);
             if (secret) {
               photoSecretsMap[order.item_id] = secret;
             }
@@ -270,6 +270,12 @@ function MainContent() {
   useEffect(() => {
     loadUserUnlocks();
   }, [user, isAdmin]);
+
+  useEffect(() => {
+    if (activeTab === 'unlocks') {
+      loadUserUnlocks();
+    }
+  }, [activeTab]);
 
   // Order created callback
   const handleOrderCreated = (order: Order) => {
@@ -455,6 +461,7 @@ function MainContent() {
             onPhotosUpdated={loadPhotos}
             onVideosUpdated={loadVideos}
             onOpenSqlModal={() => setIsSqlModalOpen(true)}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
           />
         )}
       </main>

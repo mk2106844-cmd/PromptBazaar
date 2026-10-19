@@ -213,6 +213,70 @@ const LS_SECRETS_KEY = 'promptbazaar_secrets_v1';
 const LS_VIDEOS_KEY = 'promptbazaar_videos_v1';
 const LS_VIDEO_SECRETS_KEY = 'promptbazaar_video_secrets_v1';
 const LS_ORDERS_KEY = 'promptbazaar_orders_v1';
+export const LS_GUEST_ID_KEY = 'promptbazaar_guest_id';
+
+/**
+ * Returns the stable, persisted guest ID for this browser session/device.
+ * If previous guest orders exist in localStorage, re-uses that exact anon ID
+ * so existing orders can be tracked and unlocked!
+ */
+export function getPersistedGuestId(): string {
+  try {
+    const saved = localStorage.getItem(LS_GUEST_ID_KEY);
+    if (saved && saved.trim()) {
+      return saved.trim();
+    }
+
+    // Check existing orders in localStorage to inherit any previously used anon ID
+    const rawOrders = localStorage.getItem(LS_ORDERS_KEY);
+    if (rawOrders) {
+      const parsedOrders = JSON.parse(rawOrders);
+      if (Array.isArray(parsedOrders)) {
+        for (const o of parsedOrders) {
+          if (o?.user_id && typeof o.user_id === 'string' && o.user_id.startsWith('anon-')) {
+            localStorage.setItem(LS_GUEST_ID_KEY, o.user_id);
+            return o.user_id;
+          }
+        }
+      }
+    }
+
+    // Generate high-entropy secure guest ID (timestamp + cryptographically random hex)
+    const randPart = typeof crypto !== 'undefined' && crypto.randomUUID 
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+      : Math.random().toString(36).substring(2, 14);
+    const newGuestId = `anon-${Date.now()}-${randPart}`;
+    localStorage.setItem(LS_GUEST_ID_KEY, newGuestId);
+    return newGuestId;
+  } catch {
+    return `anon-${Date.now()}`;
+  }
+}
+
+/**
+ * Returns all distinct anon_user_ids associated with this browser (including past orders).
+ */
+export function getAllGuestIds(): string[] {
+  const ids = new Set<string>();
+  const current = getPersistedGuestId();
+  if (current) ids.add(current);
+
+  try {
+    const rawOrders = localStorage.getItem(LS_ORDERS_KEY);
+    if (rawOrders) {
+      const parsedOrders = JSON.parse(rawOrders);
+      if (Array.isArray(parsedOrders)) {
+        for (const o of parsedOrders) {
+          if (o?.user_id && typeof o.user_id === 'string' && o.user_id.startsWith('anon-')) {
+            ids.add(o.user_id);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  return Array.from(ids);
+}
 
 /**
  * Data Repository API - Works seamlessly with Supabase or falls back to reactive local state
@@ -424,18 +488,33 @@ export const dataApi = {
 
         // 2. If it's paid and secretPrompt is provided, write to photo_secrets
         if (item.is_paid && secretPrompt && resultItem.id) {
-          await supabase
+          const { error: secretError } = await supabase
             .from('photo_secrets')
             .upsert({
               photo_id: resultItem.id,
               secret_prompt: secretPrompt,
             });
+          if (secretError) {
+            console.error('[Supabase Error] upsert photo_secrets failed:', secretError);
+            throw new Error(`Secret prompt save failed: ${secretError.message}`);
+          }
+        }
+
+        // Keep local cache in sync for offline resilience
+        try {
+          const existing: PhotoItem[] = JSON.parse(localStorage.getItem(LS_PHOTOS_KEY) || '[]');
+          const idx = existing.findIndex((x) => x.id === resultItem.id);
+          if (idx >= 0) existing[idx] = resultItem;
+          else existing.unshift(resultItem);
+          localStorage.setItem(LS_PHOTOS_KEY, JSON.stringify(existing));
+        } catch {
+          // quota
         }
 
         return resultItem;
-      } catch (err) {
-        console.error('Failed to save to Supabase:', err);
-        // continue to local fallback
+      } catch (err: any) {
+        console.error('Failed to save photo to Supabase:', err);
+        throw err;
       }
     }
 
@@ -522,33 +601,65 @@ export const dataApi = {
     return true;
   },
 
-  // Fetch Secret Prompt (Protected by RLS on backend)
-  async getSecretPrompt(photoId: string, userEmail?: string, isAdmin = false): Promise<string | null> {
+  // Fetch Secret Prompt (Protected by RLS & get_unlocked_photo_secret RPC on backend)
+  async getSecretPrompt(
+    photoId: string,
+    userEmail?: string,
+    isAdmin = false,
+    guestUserId?: string
+  ): Promise<string | null> {
+    const effectiveGuestId = guestUserId || getPersistedGuestId();
+
     if (isSupabaseConfigured && supabase) {
+      // 1. Direct select (for authenticated / admin users via RLS)
       try {
         const { data, error } = await supabase
           .from('photo_secrets')
           .select('secret_prompt')
           .eq('photo_id', photoId)
-          .single();
+          .maybeSingle();
 
-        if (!error && data) {
+        if (!error && data?.secret_prompt) {
           return data.secret_prompt;
         }
       } catch (err) {
-        console.warn('Secret prompt fetch error via Supabase RLS:', err);
+        // Continue to RPC
+      }
+
+      // 2. Try get_unlocked_photo_secret RPC (unlocks if order status = 'approved')
+      try {
+        const { data, error } = await supabase.rpc('get_unlocked_photo_secret', {
+          p_photo_id: photoId,
+          p_anon_user_id: effectiveGuestId || null,
+        });
+
+        if (!error && data) {
+          try {
+            const secrets = JSON.parse(localStorage.getItem(LS_SECRETS_KEY) || '{}');
+            secrets[photoId] = data;
+            localStorage.setItem(LS_SECRETS_KEY, JSON.stringify(secrets));
+          } catch {}
+          return data;
+        }
+      } catch (err) {
+        console.warn('[Supabase RPC Notice] get_unlocked_photo_secret:', err);
       }
     }
 
-    // In local mode: only allow if user has approved order for this photo or is admin
+    // 3. Fallback: only allow if user has approved order in verified local cache or is admin
     const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
     const hasApprovedOrder = orders.some(
-      (o) => o.item_id === photoId && o.status === 'approved' && (!userEmail || o.user_email === userEmail)
+      (o) =>
+        o.item_id === photoId &&
+        o.status === 'approved' &&
+        (!userEmail || o.user_email?.toLowerCase() === userEmail.toLowerCase() || (effectiveGuestId && o.user_id === effectiveGuestId))
     );
 
     if (hasApprovedOrder || isAdmin) {
-      const secrets: Record<string, string> = JSON.parse(localStorage.getItem(LS_SECRETS_KEY) || JSON.stringify(INITIAL_PHOTO_SECRETS));
-      return secrets[photoId] || 'Masterpiece ultra-realistic 8k prompt unlocked.';
+      const secrets: Record<string, string> = JSON.parse(
+        localStorage.getItem(LS_SECRETS_KEY) || JSON.stringify(INITIAL_PHOTO_SECRETS)
+      );
+      return secrets[photoId] || null;
     }
 
     return null;
@@ -671,17 +782,33 @@ export const dataApi = {
             ? `${secretContent || ''}\nFull Video Link: ${item.external_video_url}`.trim()
             : (secretContent || '');
 
-          await supabase
+          const { error: secretError } = await supabase
             .from('video_secrets')
             .upsert({
               video_id: resultItem.id,
               secret_content: finalSecret,
             });
+          if (secretError) {
+            console.error('[Supabase Error] upsert video_secrets failed:', secretError);
+            throw new Error(`Video secret save failed: ${secretError.message}`);
+          }
+        }
+
+        // Keep local cache in sync for offline resilience
+        try {
+          const existing: VideoItem[] = JSON.parse(localStorage.getItem(LS_VIDEOS_KEY) || '[]');
+          const idx = existing.findIndex((x) => x.id === resultItem.id);
+          if (idx >= 0) existing[idx] = resultItem;
+          else existing.unshift(resultItem);
+          localStorage.setItem(LS_VIDEOS_KEY, JSON.stringify(existing));
+        } catch {
+          // quota
         }
 
         return resultItem;
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to save video to Supabase:', err);
+        throw err;
       }
     }
 
@@ -774,33 +901,76 @@ export const dataApi = {
     return true;
   },
 
-  // Fetch Secret Video Content (Protected by RLS on backend)
-  async getVideoSecret(videoId: string, userEmail?: string, isAdmin = false): Promise<string | null> {
+  // Fetch Secret Video Content (Protected by RLS and get_unlocked_video_secret RPC on backend)
+  async getVideoSecret(
+    videoId: string,
+    userEmail?: string,
+    isAdmin = false,
+    guestUserId?: string
+  ): Promise<string | null> {
+    const effectiveGuestId = guestUserId || getPersistedGuestId();
+
     if (isSupabaseConfigured && supabase) {
+      // 1. Direct select (for authenticated / admin users via RLS)
       try {
         const { data, error } = await supabase
           .from('video_secrets')
           .select('secret_content')
           .eq('video_id', videoId)
-          .single();
+          .maybeSingle();
 
-        if (!error && data) {
+        if (!error && data?.secret_content) {
+          try {
+            const secrets = JSON.parse(localStorage.getItem(LS_VIDEO_SECRETS_KEY) || '{}');
+            secrets[videoId] = data.secret_content;
+            localStorage.setItem(LS_VIDEO_SECRETS_KEY, JSON.stringify(secrets));
+          } catch {}
           return data.secret_content;
         }
       } catch (err) {
-        console.warn('Video secret fetch error via Supabase RLS:', err);
+        // Continue to RPC
+      }
+
+      // 2. Try get_unlocked_video_secret RPC (unlocks if order status = 'approved')
+      try {
+        const { data, error } = await supabase.rpc('get_unlocked_video_secret', {
+          p_video_id: videoId,
+          p_anon_user_id: effectiveGuestId || null,
+        });
+
+        if (!error && data) {
+          try {
+            const secrets = JSON.parse(localStorage.getItem(LS_VIDEO_SECRETS_KEY) || '{}');
+            secrets[videoId] = data;
+            localStorage.setItem(LS_VIDEO_SECRETS_KEY, JSON.stringify(secrets));
+          } catch {}
+          return data;
+        }
+      } catch (err) {
+        console.warn('[Supabase RPC Notice] get_unlocked_video_secret:', err);
       }
     }
 
     // In local mode: only allow if user has approved order for this video or is admin
     const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
     const hasApprovedOrder = orders.some(
-      (o) => o.item_id === videoId && o.status === 'approved' && (!userEmail || o.user_email === userEmail)
+      (o) =>
+        o.item_id === videoId &&
+        o.status === 'approved' &&
+        (!userEmail || o.user_email?.toLowerCase() === userEmail.toLowerCase() || (effectiveGuestId && o.user_id === effectiveGuestId))
     );
 
     if (hasApprovedOrder || isAdmin) {
-      const secrets: Record<string, string> = JSON.parse(localStorage.getItem(LS_VIDEO_SECRETS_KEY) || JSON.stringify(INITIAL_VIDEO_SECRETS));
-      return secrets[videoId] || 'Full HD Masterpiece Video prompt & assets unlocked.';
+      const secrets: Record<string, string> = JSON.parse(
+        localStorage.getItem(LS_VIDEO_SECRETS_KEY) || JSON.stringify(INITIAL_VIDEO_SECRETS)
+      );
+      if (secrets[videoId]) return secrets[videoId];
+
+      const videos: VideoItem[] = JSON.parse(localStorage.getItem(LS_VIDEOS_KEY) || '[]');
+      const targetVideo = videos.find((v) => v.id === videoId);
+      if (targetVideo?.free_content) return targetVideo.free_content;
+
+      return 'Full HD Masterpiece Video prompt & assets unlocked.';
     }
 
     return null;
@@ -816,108 +986,253 @@ export const dataApi = {
     upiRef: string;
     screenshotUrl?: string;
   }): Promise<Order> {
-    let createdOrder: Order | null = null;
-
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('orders')
-          .insert({
-            user_id: orderData.userId,
-            user_email: orderData.userEmail,
-            item_type: orderData.itemType,
-            item_id: orderData.itemId,
-            amount: orderData.amount,
-            upi_ref: orderData.upiRef,
-            screenshot_url: orderData.screenshotUrl || null,
-            status: 'pending',
-          })
-          .select()
-          .single();
-
-        if (error) {
-          console.error('Supabase create order failed (RLS?):', error.message);
-          throw new Error(error.message || 'Payment submission failed.');
-        }
-
-        if (data) {
-          createdOrder = data;
-        }
-      } catch (err: any) {
-        console.error('Supabase create order failed:', err);
-        throw err; // Propagate error so frontend knows submission failed
-      }
-    }
-
-    // Always keep local storage in sync (especially critical for anonymous users)
-    const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
-    const newOrder: Order = createdOrder || {
-      id: `ord-${Date.now()}`,
+    const generatedId = `ord-${Date.now()}`;
+    const fallbackOrder: Order = {
+      id: generatedId,
       user_id: orderData.userId,
-      user_email: orderData.userEmail,
+      user_email: orderData.userEmail.trim().toLowerCase(),
       item_type: orderData.itemType,
       item_id: orderData.itemId,
       amount: orderData.amount,
-      upi_ref: orderData.upiRef,
+      upi_ref: orderData.upiRef.trim(),
       screenshot_url: orderData.screenshotUrl,
       status: 'pending',
       created_at: new Date().toISOString(),
     };
 
-    orders.unshift(newOrder);
-    localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(orders));
-
-    return newOrder;
-  },
-
-  // Fetch orders for current user
-  async getUserOrders(userId?: string, userEmail?: string): Promise<Order[]> {
-    const localOrders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
-
     if (isSupabaseConfigured && supabase) {
       try {
-        let data: Order[] | null = null;
+        const payload = {
+          user_id: orderData.userId,
+          user_email: orderData.userEmail.trim().toLowerCase(),
+          item_type: orderData.itemType,
+          item_id: orderData.itemId,
+          amount: orderData.amount,
+          upi_ref: orderData.upiRef.trim(),
+          screenshot_url: orderData.screenshotUrl || null,
+          status: 'pending',
+        };
 
-        if (userId) {
-          const res = await supabase.from('orders').select('*').eq('user_id', userId).order('created_at', { ascending: false });
-          if (res.error) throw res.error;
-          data = res.data;
-        } else if (localOrders.length > 0) {
-          // Anonymous user: fetch orders by the IDs they have in local storage via secure RPC
-          const localOrderIds = localOrders.map(o => o.id);
-          const res = await supabase.rpc('get_anon_orders', { order_ids: localOrderIds });
-          if (res.error) {
-            console.warn('[Supabase Warning] get_anon_orders RPC failed (possibly not deployed yet), falling back to local data:', res.error);
-            return localOrders;
+        const { data, error } = await supabase
+          .from('orders')
+          .insert(payload)
+          .select()
+          .maybeSingle();
+
+        if (!error && data) {
+          // Sync with local cache for instant UI feedback
+          const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+          orders.unshift(data);
+          localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(orders));
+          return data;
+        }
+
+        if (error) {
+          // If select failed because user is anon (PGRST116), the insert still succeeded in DB
+          if (error.code === 'PGRST116' || error.message?.includes('0 rows')) {
+            const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+            orders.unshift(fallbackOrder);
+            localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(orders));
+            return fallbackOrder;
           }
-          data = res.data;
-        } else {
-          return [];
+
+          console.error('[Supabase Error] dataApi.createOrder failed:', error);
+          throw new Error(`Order save nahi ho saka: ${error.message}`);
         }
-
-        if (data && data.length > 0 && !userId) {
-          // Sync database status back to local storage for anonymous users
-          const updatedLocalOrders = localOrders.map(localOrder => {
-            const remoteOrder = data!.find(r => r.id === localOrder.id);
-            return remoteOrder ? { ...localOrder, status: remoteOrder.status } : localOrder;
-          });
-          localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(updatedLocalOrders));
-
-          // Return the latest synced localOrders so that un-fetched pending orders are not lost
-          return updatedLocalOrders;
-        }
-
-        if (!userId) return localOrders;
-
-        return data || [];
-      } catch (err) {
-        console.error('[Supabase Network/Query Error] dataApi.getUserOrders:', err);
+      } catch (err: any) {
+        console.error('Supabase create order failed:', err);
         throw err;
       }
     }
 
-    if (!userEmail && !userId) return localOrders;
-    return localOrders.filter((o) => o.user_id === userId || (userEmail && o.user_email === userEmail));
+    // Local storage fallback only if Supabase not configured
+    const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+    orders.unshift(fallbackOrder);
+    localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(orders));
+    return fallbackOrder;
+  },
+
+  // Fetch orders for current user (supports matching by user_id OR user_email for Google login, and guest anon_user_id)
+  async getUserOrders(userId?: string, userEmail?: string, explicitGuestId?: string): Promise<Order[]> {
+    const cleanEmail = userEmail?.trim().toLowerCase();
+    const persistedGuestId = explicitGuestId || getPersistedGuestId();
+    const guestIds = getAllGuestIds();
+    if (persistedGuestId && !guestIds.includes(persistedGuestId)) {
+      guestIds.push(persistedGuestId);
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let fetchedDbOrders: Order[] = [];
+
+        // 1. If user is authenticated, query orders by userId or cleanEmail
+        if (userId || cleanEmail) {
+          let query = supabase.from('orders').select('*');
+          if (userId && cleanEmail) {
+            query = query.or(`user_id.eq.${userId},user_email.ilike.${cleanEmail}`);
+          } else if (userId) {
+            query = query.eq('user_id', userId);
+          } else if (cleanEmail) {
+            query = query.ilike('user_email', cleanEmail);
+          }
+          const { data, error } = await query.order('created_at', { ascending: false });
+          if (!error && data) {
+            fetchedDbOrders = data;
+          } else if (error) {
+            console.error('[Supabase Error] dataApi.getUserOrders authenticated query failed:', error);
+          }
+        }
+
+        // 2. Query guest orders using get_anon_orders RPC (Requirement 2 & 9)
+        // Also query for all guest IDs associated with this browser session
+        if (!userId || guestIds.length > 0) {
+          for (const gId of guestIds) {
+            if (!gId || !gId.trim()) continue;
+            let rpcSucceeded = false;
+            try {
+              // Exact expected RPC signature: get_anon_orders(anon_user_id)
+              const { data: rpcOrders, error: rpcErr } = await supabase.rpc('get_anon_orders', {
+                anon_user_id: gId,
+              });
+
+              if (!rpcErr && Array.isArray(rpcOrders)) {
+                rpcSucceeded = true;
+                for (const ro of rpcOrders) {
+                  if (!fetchedDbOrders.some((existing) => existing.id === ro.id)) {
+                    fetchedDbOrders.push(ro);
+                  }
+                }
+              } else if (rpcErr) {
+                // If database has get_anon_orders(order_ids UUID[]) variant
+                const localOrdersForCheck: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+                const localUuids = localOrdersForCheck
+                  .map((o) => o.id)
+                  .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+
+                if (localUuids.length > 0) {
+                  const { data: uuidOrders, error: uuidErr } = await supabase.rpc('get_anon_orders', {
+                    order_ids: localUuids,
+                  });
+                  if (!uuidErr && Array.isArray(uuidOrders) && uuidOrders.length > 0) {
+                    rpcSucceeded = true;
+                    for (const uo of uuidOrders) {
+                      if (!fetchedDbOrders.some((existing) => existing.id === uo.id)) {
+                        fetchedDbOrders.push(uo);
+                      }
+                    }
+                  }
+                }
+
+                if (!rpcSucceeded) {
+                  console.warn('[Supabase RPC Notice] get_anon_orders:', rpcErr.message);
+                }
+              }
+            } catch (rpcEx) {
+              console.warn('[Supabase RPC Exception] get_anon_orders:', rpcEx);
+            }
+
+            // Fallback direct table query if RPC was not executed or not found
+            if (!rpcSucceeded) {
+              try {
+                const { data: directOrders, error: directErr } = await supabase
+                  .from('orders')
+                  .select('*')
+                  .eq('user_id', gId)
+                  .order('created_at', { ascending: false });
+
+                if (!directErr && directOrders) {
+                  for (const dro of directOrders) {
+                    if (!fetchedDbOrders.some((existing) => existing.id === dro.id)) {
+                      fetchedDbOrders.push(dro);
+                    }
+                  }
+                }
+              } catch (directEx) {
+                console.warn('[Supabase Direct Query Notice]:', directEx);
+              }
+            }
+          }
+        }
+
+        // 3. Sync local orders cache with the latest status from Supabase (Requirement 4)
+        // And replace/remove any duplicate placeholder orders (Requirement 7)
+        const localOrders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+        const updatedLocal = [...localOrders];
+
+        // For each database order, update matching local orders
+        for (const dbOrder of fetchedDbOrders) {
+          const matchIndex = updatedLocal.findIndex((lo) => lo.id === dbOrder.id);
+          if (matchIndex >= 0) {
+            updatedLocal[matchIndex] = { ...updatedLocal[matchIndex], ...dbOrder };
+          } else {
+            // Check if there's a temporary client-generated ord- placeholder matching this order
+            const placeholderIdx = updatedLocal.findIndex(
+              (lo) =>
+                lo.id.startsWith('ord-') &&
+                lo.item_id === dbOrder.item_id &&
+                (lo.user_id === dbOrder.user_id || (lo.upi_ref && lo.upi_ref === dbOrder.upi_ref))
+            );
+            if (placeholderIdx >= 0) {
+              // Replace placeholder with the real database order!
+              updatedLocal[placeholderIdx] = dbOrder;
+            } else {
+              updatedLocal.unshift(dbOrder);
+            }
+          }
+        }
+
+        // Clean up any stale placeholder where an approved database order exists for the same item
+        const finalLocal = updatedLocal.filter((o) => {
+          if (o.id.startsWith('ord-')) {
+            const hasRealDbMatch = fetchedDbOrders.some(
+              (dbo) => dbo.item_id === o.item_id && (dbo.user_id === o.user_id || (dbo.upi_ref && dbo.upi_ref === o.upi_ref))
+            );
+            return !hasRealDbMatch;
+          }
+          return true;
+        });
+
+        // Save synchronized orders back to localStorage
+        try {
+          localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(finalLocal));
+        } catch {}
+
+        // Return combined, deduplicated, sorted list
+        const finalMap = new Map<string, Order>();
+        for (const o of fetchedDbOrders) {
+          finalMap.set(o.id, o);
+        }
+        for (const lo of finalLocal) {
+          if (!finalMap.has(lo.id)) {
+            const matchesUser =
+              (userId && lo.user_id === userId) ||
+              (cleanEmail && lo.user_email?.toLowerCase() === cleanEmail) ||
+              guestIds.includes(lo.user_id);
+            if (matchesUser) {
+              finalMap.set(lo.id, lo);
+            }
+          }
+        }
+
+        const sorted = Array.from(finalMap.values()).sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+
+        return sorted;
+      } catch (err) {
+        console.error('[Supabase Network/Query Error] dataApi.getUserOrders:', err);
+      }
+    }
+
+    // Offline / Local storage fallback
+    const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+    if (!userEmail && !userId && guestIds.length === 0) return orders;
+    return orders.filter(
+      (o) =>
+        (userId && o.user_id === userId) ||
+        (cleanEmail && o.user_email?.toLowerCase() === cleanEmail) ||
+        guestIds.includes(o.user_id)
+    );
   },
 
   // Admin fetch all orders
@@ -955,13 +1270,23 @@ export const dataApi = {
           .eq('id', orderId);
 
         if (error) {
-          console.error('Supabase update error:', error);
-          return false;
+          console.error('[Supabase Error] updateOrderStatus failed:', error);
+          throw new Error(`Order status update nahi ho saka: ${error.message}`);
         }
+
+        // Sync with local cache
+        const orders: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
+        const target = orders.find((o) => o.id === orderId);
+        if (target) {
+          target.status = status;
+          target.updated_at = new Date().toISOString();
+          localStorage.setItem(LS_ORDERS_KEY, JSON.stringify(orders));
+        }
+
         return true;
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to update order status in Supabase:', err);
-        return false;
+        throw err;
       }
     }
 
@@ -1243,7 +1568,16 @@ export const dataApi = {
             contentType: file.type || 'image/jpeg',
           });
 
-        if (!error && data) {
+        if (error) {
+          console.error('[Supabase Storage Error] uploadMediaFile:', error);
+          const isRls = error.message?.toLowerCase().includes('policy') || error.message?.toLowerCase().includes('row-level security') || (error as any).statusCode === 403;
+          if (isRls) {
+            throw new Error('Supabase "media" bucket storage policy allow nahi hai. Kripya Admin Panel me "SQL Setup" se updated storage migration run karein aur verify karein ki aap admin account se logged in hain.');
+          }
+          throw new Error(`Media upload fail hua (${bucket}): ${error.message}`);
+        }
+
+        if (data) {
           const { data: publicData } = supabase.storage
             .from(bucket)
             .getPublicUrl(data.path);
@@ -1251,15 +1585,14 @@ export const dataApi = {
           if (publicData?.publicUrl) {
             return publicData.publicUrl;
           }
-        } else if (error) {
-          console.warn('Supabase storage upload error:', error.message);
         }
-      } catch (err) {
-        console.warn('Storage upload failed, falling back to data URL:', err);
+      } catch (err: any) {
+        console.error('Storage upload failed:', err);
+        throw err;
       }
     }
 
-    // Fallback: create base64 Data URL or blob URL
+    // Fallback ONLY when Supabase is not configured (offline demo mode)
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
