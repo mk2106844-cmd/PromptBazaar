@@ -1264,6 +1264,26 @@ export const dataApi = {
   async deleteOrder(orderId: string): Promise<boolean> {
     if (isSupabaseConfigured && supabase) {
       try {
+        // Fetch order to get screenshot URL before deleting
+        const { data: orderData, error: fetchError } = await supabase
+          .from('orders')
+          .select('screenshot_url')
+          .eq('id', orderId)
+          .single();
+
+        if (fetchError) {
+          console.error('[Supabase Error] deleteOrder fetch failed:', fetchError);
+        } else if (orderData?.screenshot_url && !orderData.screenshot_url.startsWith('http')) {
+          // Delete screenshot from storage if it exists and is a path
+          const { error: storageError } = await supabase.storage
+            .from('payment-screenshots')
+            .remove([orderData.screenshot_url]);
+
+          if (storageError) {
+            console.error('[Supabase Error] deleteOrder storage remove failed:', storageError);
+          }
+        }
+
         const { error } = await supabase
           .from('orders')
           .delete()
