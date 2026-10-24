@@ -458,7 +458,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           : 'Naya photo prompt publish ho gaya! 🎉'
       );
     } catch (err: any) {
-      showFeedback('Error saving photo: ' + err.message, 'error');
+      console.error('Save photo error:', err);
+      showFeedback('Error saving photo: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setIsSavingPhoto(false);
     }
@@ -706,7 +707,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           : 'Naya video ad publish ho gaya! 🎉'
       );
     } catch (err: any) {
-      showFeedback('Error saving video: ' + err.message, 'error');
+      console.error('Save video error:', err);
+      showFeedback('Error saving video: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setIsSavingVideo(false);
     }

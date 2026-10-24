@@ -1103,29 +1103,7 @@ export const dataApi = {
                   }
                 }
               } else if (rpcErr) {
-                // If database has get_anon_orders(order_ids UUID[]) variant
-                const localOrdersForCheck: Order[] = JSON.parse(localStorage.getItem(LS_ORDERS_KEY) || '[]');
-                const localUuids = localOrdersForCheck
-                  .map((o) => o.id)
-                  .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
-
-                if (localUuids.length > 0) {
-                  const { data: uuidOrders, error: uuidErr } = await supabase.rpc('get_anon_orders', {
-                    order_ids: localUuids,
-                  });
-                  if (!uuidErr && Array.isArray(uuidOrders) && uuidOrders.length > 0) {
-                    rpcSucceeded = true;
-                    for (const uo of uuidOrders) {
-                      if (!fetchedDbOrders.some((existing) => existing.id === uo.id)) {
-                        fetchedDbOrders.push(uo);
-                      }
-                    }
-                  }
-                }
-
-                if (!rpcSucceeded) {
-                  console.warn('[Supabase RPC Notice] get_anon_orders:', rpcErr.message);
-                }
+                console.warn('[Supabase RPC Notice] get_anon_orders:', rpcErr.message);
               }
             } catch (rpcEx) {
               console.warn('[Supabase RPC Exception] get_anon_orders:', rpcEx);
